@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Creates IAM role used by the Migration Engine. This is the automation used
+  to integrate AWS accounts into AWS's AWS Org.
+Parameters:
+  MEMasterAccountId:
+    Type: String
+    Description: 'AWS Master Account Id.'
+
+Resources:
+  MigrationEngineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: MigrationEngineRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${MEMasterAccountId}:role/MigrationEngineRole'
+            Action:
+              - 'sts:AssumeRole'
+      Path: "/"
+      Policies:
+        - PolicyName: BasicLambdaAccessPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'ssm:GetParameter'
+                Resource: '*'
+        - PolicyName: organizationAndIAMAccessPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'organizations:InviteAccountToOrganization'
+                  - 'organizations:DescribeAccount'
+                  - 'organizations:DeleteOrganization'
+                  - 'organizations:AcceptHandshake'
+                  - 'organizations:ListHandshakesForOrganization'
+                  - 'organizations:LeaveOrganization'
+                  - 'organizations:ListHandshakesForAccount'
+                  - 'organizations:RemoveAccountFromOrganization'
+                  - 'organizations:ListAccounts'
+                  - 'organizations:DescribeOrganization'
+                  - 'organizations:DescribeHandshake'
+                  - 'iam:GetRole'
+                  - 'iam:GetPolicy'
+                  - 'iam:ListRoles'
+                  - 'iam:CreateRole'
+                  - 'iam:AttachRolePolicy'
+                  - 'iam:PutRolePolicy'
+                  - 'iam:CreatePolicy'
+                  - 'iam:PutUserPolicy'
+                  - 'iam:UpdateRole'
+                  - 'iam:GetRolePolicy'
+                  - 'iam:GetAccountSummary'
+                  - 'sts:AssumeRole'
+                Resource: '*'
+

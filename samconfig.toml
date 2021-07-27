@@ -1,0 +1,11 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "test1"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-16w8bvm318qae"
+s3_prefix = "test1"
+region = "us-west-1"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+parameter_overrides = "MasterAccountId=\"063847301064\" SupportCaseCCEmailAddresses=\"iftik@amazon.com\" NotificationEmailAddresses=\"iftik@amazon.com\" StsExternalID=\"adasdas\" LogLevel=\"INFO\" WaitTime=\"21600\" AccountEmailCheck=\"False\" AccountNameCheck=\"False\" NotificationTopicName=\"DevOpsChannel\" DefaultOUId=\"ou-2z89-v1sr51hj\" CreateSupportCase=\"False\""

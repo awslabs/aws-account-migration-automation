@@ -1,0 +1,1261 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: "AWS::Serverless-2016-10-31"
+
+Parameters:
+  MasterAccountId:
+    Type: String
+    Default: 540351219706
+    Description: "AWS Master Account Id."
+
+  SupportCaseCCEmailAddresses:
+    Type: String
+    Default: "iftik@amazon.com"
+    Description: "Support case email CC address"
+
+  NotificationEmailAddresses:
+    Type: String
+    Default: "iftik@amazon.com"
+    Description: "Notification  email address"
+
+  StsExternalID:
+    Type: String
+    Description: "AWS STS External ID."
+
+  LogLevel:
+    Type: String
+    Default: INFO
+    Description: "Logging is set to INFO, Use DEBUG for more logging"
+
+  WaitTime:
+    Type: Number
+    Default: 21600
+    Description: "Waiting time(in seconds) between each phase of step function where human intervention is required"
+
+  AccountEmailCheck:
+    Type: String
+    Default: FALSE
+    Description: "If set to true then only accounts that match the AWS email standards will be migrated, valid values are 'TRUE'/'FALSE'"
+
+  AccountNameCheck:
+    Type: String
+    Default: FALSE
+    Description: "If set to true then only accounts that match the AWS account name standards will be migrated,valid values are 'TRUE'/'FALSE'"
+
+  NotificationTopicName:
+    Type: String
+    Default: DevOpsChannel
+    Description: SNS Topic ARN for sending notifications
+
+  DefaultOUId:
+    Type: String
+    Default: ou-2z89-v1sr51hj
+    Description: "Accounts that joined AWS organization successfully will be moved into this OU."
+
+  CreateSupportCase:
+    Type: String
+    Default: TRUE
+    Description: "If set to true then will create a support case to have the billing updated in the target account. valid values are 'TRUE'/'FALSE'"
+
+Resources:
+  # IAM Roles
+  MigrationEngineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "S3Policy"
+          PolicyDocument:
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:GetObject"
+                  - "s3:ListObjects"
+                  - "s3:PutObject"
+                  - "s3:HeadObject"
+                Resource: !Sub "arn:aws:s3:::${SharedResourcesBucket}/*"
+
+        - PolicyName: "SNSTopicAccessPolicy"
+          PolicyDocument:
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "sns:Publish"
+                  - "sns:Subscribe"
+                Resource: "*"
+
+        - PolicyName: BasicLambdaAccessPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "ssm:GetParameter"
+                  - "support:*"
+                  - "states:StartExecution"
+                Resource: "*"
+        - PolicyName: organizationAndIAMAccessPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "organizations:InviteAccountToOrganization"
+                  - "organizations:DescribeAccount"
+                  - "organizations:DeleteOrganization"
+                  - "organizations:AcceptHandshake"
+                  - "organizations:ListHandshakesForOrganization"
+                  - "organizations:LeaveOrganization"
+                  - "organizations:ListHandshakesForAccount"
+                  - "organizations:RemoveAccountFromOrganization"
+                  - "organizations:ListAccounts"
+                  - "organizations:DescribeOrganization"
+                  - "organizations:DescribeHandshake"
+                  - "organizations:MoveAccount"
+                  - "organizations:ListParents"
+                  - "iam:GetRole"
+                  - "iam:GetPolicy"
+                  - "iam:ListRoles"
+                  - "iam:CreateRole"
+                  - "iam:AttachRolePolicy"
+                  - "iam:PutRolePolicy"
+                  - "iam:CreatePolicy"
+                  - "iam:PutUserPolicy"
+                  - "iam:UpdateRole"
+                  - "iam:GetRolePolicy"
+                  - "iam:GetAccountSummary"
+                  - "sts:AssumeRole"
+                  - "access-analyzer:ListAnalyzers"
+                  - "access-analyzer:GetFinding"
+                  - "access-analyzer:GetAnalyzer"
+                  - "access-analyzer:ListFindings"
+                  - "access-analyzer:StartResourceScan"
+                  - "access-analyzer:CreateAnalyzer"
+                Resource: "*"
+
+        - PolicyName: DynamodbPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:BatchGet*"
+                  - "dynamodb:Get*"
+                  - "dynamodb:Query"
+                  - "dynamodb:Scan"
+                  - "dynamodb:BatchWrite*"
+                  - "dynamodb:Update*"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:List*"
+                  - "dynamodb:Describe*"
+                Resource: !Sub "arn:aws:dynamodb:*:${MasterAccountId}:table/${AccountInfoTable}*"
+
+  # Step function Role
+  StepFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - !Sub states.${AWS::Region}.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "StatesExecutionPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "lambda:InvokeFunction"
+                  - "states:StartExecution"
+                Resource: "*"
+  # SNS
+  Topic:
+    Type: AWS::SNS::Topic
+
+  # S3 bucket
+  SharedResourcesBucket:
+    Type: AWS::S3::Bucket
+
+  # SNS Notification Topic
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Ref NotificationTopicName
+      Subscription:
+        - Endpoint: !Ref NotificationEmailAddresses
+          Protocol: email
+
+
+  #Dynamodb
+  AccountInfoTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: "True"
+      AttributeDefinitions:
+        - AttributeName: "AccountId"
+          AttributeType: "S"
+        - AttributeName: "AccountType"
+          AttributeType: "S"
+        - AttributeName: "CompanyName"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "CompanyName"
+          KeyType: "HASH"
+        - AttributeName: "AccountId"
+          KeyType: "RANGE"
+      LocalSecondaryIndexes:
+        - IndexName: "AccountType"
+          KeySchema:
+            - AttributeName: "CompanyName"
+              KeyType: "HASH"
+            - AttributeName: "AccountType"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "ALL"
+      BillingMode: "PAY_PER_REQUEST"
+
+
+  ReportEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "rate(7 days)"
+      State: "ENABLED"
+      Targets:
+        - Arn: !Sub ${GenerateReport.Arn}
+          Id: !Sub "${AWS::StackName}-ReportsTrigger"
+
+  # Lambda Layer
+  MigrationEngineDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: lambda_layer
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: makefile
+
+  # AE Report lambda
+  GenerateReport:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "reports.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          SHARED_RESOURCE_BUCKET: !Sub ${SharedResourcesBucket}
+
+
+  # Preprocessor Migration lambdas
+  LoadData:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "load_data.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 60
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          SHARED_RESOURCE_BUCKET: !Sub ${SharedResourcesBucket}
+
+  GetAccounts:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "get_accounts.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+          Migration_ENGINE_ARN: !Sub ${MigrationEngine}
+  CreateRolesMaster:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "create_master_roles.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+  ScanedResourceStatus:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "check_org_scan_status.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          DEFAULT_OU_ID: !Sub ${DefaultOUId}
+
+  SupportCase:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "support_case.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 60
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          CREATE_SUPPORT_CASE: !Sub ${CreateSupportCase}
+
+  Cleanup:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "cleanup.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}\
+  # Migration Lambdas
+  CreateRoles:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "create_roles.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+  CheckBillingAccess:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "check_billing_access.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+
+  LeaveOrganization:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "leave_organization.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+  JoinOrganization:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "join_organization.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 240
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+  UpdateOU:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "update_account_ou.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          DEFAULT_OU_ID: !Sub ${DefaultOUId}
+
+  GenerateAccountTags:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "update_tags.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          SHARED_RESOURCE_BUCKET: !Sub ${SharedResourcesBucket}
+
+  # Notification handler lambdas
+  NotificationLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "notification_observer.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 30
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+          NOTIFICATION_OBSERVER_ARN: !Sub ${NotificationHandler}
+      Events:
+        SnsEvent:
+          Type: SNS
+          Properties:
+            Topic: !Sub ${Topic}
+  NotificationIdentifierLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "notification_identifier.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 30
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+  NotificationHandlerLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "notification_handler.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 30
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+  NotifierLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "notifier.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 30
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          ACCOUNT_NAME_VALIDATION: !Sub ${AccountEmailCheck}
+          ACCOUNT_EMAIL_VALIDATION: !Sub ${AccountNameCheck}
+
+  GetActiveRegionLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "active_regions_generator.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          DEFAULT_OU_ID: !Sub ${DefaultOUId}
+
+  ActivateAnalyzerLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "activate_analyzer.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          DEFAULT_OU_ID: !Sub ${DefaultOUId}
+
+  GetDependentResourcesLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: "get_org_dependent_resources.lambda_handler"
+      Runtime: "python3.8"
+      CodeUri: "./src"
+      Timeout: 120
+      Role: !Sub ${MigrationEngineRole.Arn}
+      Layers:
+        - !Sub ${MigrationEngineDependenciesLayer}
+      Environment:
+        Variables:
+          MASTER_ACCOUNT_ID: !Sub ${MasterAccountId}
+          STS_EXTERNAL_ID: !Sub ${StsExternalID}
+          TARGET_ACCOUNT_TABLE_NAME: !Sub ${AccountInfoTable}
+          NOTIFICATION_TOPIC: !Sub ${Topic}
+          SLACK_TOPIC: !Sub ${NotificationTopicName}
+          LOG_LEVEL: !Sub ${LogLevel}
+          CASE_CC_EMAIL_ADDRESSES: !Sub ${SupportCaseCCEmailAddresses}
+          DEFAULT_OU_ID: !Sub ${DefaultOUId}
+
+
+  # Preprocessor StepFunction
+  Preprocessor:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${AWS::StackName}-Preprocessor"
+      RoleArn: !Sub ${StepFunctionExecutionRole.Arn}
+      DefinitionString: !Sub |
+        {
+          "Comment":"AWS Migration engine main flow",
+          "StartAt":"LoadData",
+          "States":{
+            "LoadData":{
+              "Type":"Task",
+              "Resource":"${LoadData.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CreateMasterRoles"
+            },
+            "CreateMasterRoles":{
+              "Type":"Task",
+              "Resource":"${CreateRolesMaster.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"AccountTypeCheck"
+            },
+            "AccountTypeCheck":{
+               "Type":"Choice",
+               "Choices":[
+               {
+                  "Variable":"$.Data.Status",
+                  "StringEquals":"StandaloneAccountFlow",
+                  "Next":"GetTargetAccounts"
+               },
+               {
+                  "Variable":"$.Data.Status",
+                  "StringEquals":"LinkedAccountFlow",
+                  "Next":"StartPermissionstScanner"
+               }
+               ]
+             },
+            "StartPermissionstScanner": {
+               "Type": "Task",
+               "Resource":"arn:aws:states:::states:startExecution",
+               "Parameters":{
+                  "Input": {
+                    "Data.$": "$.Data"
+                  },
+                  "StateMachineArn": "${DependentResourceFinder}",
+                  "Name.$":"$.Data.ProcessName"
+               },
+             "ResultPath":"$.Result",
+             "Next":"GetScannedResourcePermissions"
+            },
+
+            "GetScannedResourcePermissions":{
+              "Type":"Task",
+              "Resource":"${ScanedResourceStatus.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CheckScanedResourcePermissionsStatus"
+            },
+            "CheckScanedResourcePermissionsStatus":{
+              "Type":"Choice",
+              "Choices":[
+              {
+                 "Variable":"$.Status",
+                 "StringEquals":"Wait",
+                 "Next":"WaitForScanedResourcePermissions"
+              },
+              {
+                 "Variable":"$.Status",
+                 "StringEquals":"Completed",
+                 "Next":"SupportCase"
+              }
+              ]
+            },
+            "WaitForScanedResourcePermissions": {
+              "Type": "Wait",
+              "Seconds": ${WaitTime},
+              "Next": "GetScannedResourcePermissions"
+            },
+            "SupportCase":{
+              "Type":"Task",
+              "Resource":"${SupportCase.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CheckSupportCaseStatus"
+            },
+            "CheckSupportCaseStatus":{
+              "Type":"Choice",
+              "Choices":[
+              {
+                 "Variable":"$.Status",
+                 "StringEquals":"Wait",
+                 "Next":"WaitForSupportCaseChanges"
+              },
+              {
+                 "Variable":"$.Status",
+                 "StringEquals":"Completed",
+                 "Next":"GetTargetAccounts"
+              }
+              ]
+            },
+            "WaitForSupportCaseChanges": {
+              "Type": "Wait",
+              "Seconds": ${WaitTime},
+              "Next": "SupportCase"
+            },
+            "GetTargetAccounts":{
+             "Type":"Task",
+             "Resource":"${GetAccounts.Arn}",
+             "Catch":[
+             {
+               "ErrorEquals":[
+                 "States.ALL"
+               ],
+               "Next":"UnhandledError"
+             }
+             ],
+             "Next":"MoveAccount"
+           },
+           "MoveAccount": {
+             "Type": "Map",
+             "InputPath": "$",
+             "ItemsPath": "$.Accounts",
+             "MaxConcurrency": 16,
+             "Parameters": {
+             "Data.$": "$$.Map.Item.Value"
+             },
+             "Iterator": {
+                 "StartAt": "UpdateAccount",
+                 "States": {
+                     "UpdateAccount": {
+                         "Type": "Task",
+                         "Resource":"arn:aws:states:::states:startExecution",
+                         "Parameters":{
+                            "Input": {
+                              "Data.$": "$.Data"
+                            },
+                            "StateMachineArn": "${MigrationEngine}",
+                            "Name.$":"$.Data.ProcessName"
+                         },
+                       "End": true
+                     }
+                 }
+             },
+             "ResultPath":"$.Data",
+             "Next":"Cleanup"
+           },
+            "Cleanup":{
+              "Type":"Task",
+              "Resource":"${Cleanup.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CheckCleanupStatus"
+            },
+            "CheckCleanupStatus":{
+              "Type":"Choice",
+              "Choices":[
+              {
+                 "Variable":"$.Status",
+                 "StringEquals":"Wait",
+                 "Next":"WaitCleanupChanges"
+              },
+              {
+                 "Variable":"$.Status",
+                 "StringEquals":"Completed",
+                 "Next":"FlowCompleted"
+              }]
+            },
+            "WaitCleanupChanges": {
+              "Type": "Wait",
+              "Seconds": ${WaitTime},
+              "Next": "Cleanup"
+            },
+            "UnhandledError":{
+              "Type":"Fail"
+            },
+            "FlowCompleted":{
+              "Type":"Pass",
+              "End":true
+            }
+          }
+        }
+  # Main Flow StepFunction
+  MigrationEngine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${AWS::StackName}-MigrationEngine"
+      RoleArn: !Sub ${StepFunctionExecutionRole.Arn}
+      DefinitionString: !Sub |
+        {
+          "Comment":"AWS Migration engine main flow",
+          "StartAt":"CreateRoles",
+          "States":{
+            "CreateRoles":{
+              "Type":"Task",
+              "Resource":"${CreateRoles.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CheckCreateRolesStatus"
+            },
+            "CheckCreateRolesStatus":{
+               "Type":"Choice",
+               "Choices":[
+               {
+                  "Variable":"$.Data.Status",
+                  "StringEquals":"Wait",
+                  "Next":"WaitCreateRolesChanges"
+               },
+               {
+                  "Variable":"$.Data.Status",
+                  "StringEquals":"Completed",
+                  "Next":"CheckBillingAccess"
+               },
+               {
+                  "Variable":"$.Data.Status",
+                  "StringEquals":"StandaloneAccountFlow",
+                  "Next":"LeaveCurrentOrganization"
+               }
+
+               ]
+             },
+             "WaitCreateRolesChanges": {
+               "Type": "Wait",
+               "Seconds": ${WaitTime},
+               "Next": "CreateRoles"
+             },
+            "CheckBillingAccess":{
+              "Type":"Task",
+              "Resource":"${CheckBillingAccess.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CheckBillingAccessStatus"
+            },
+            "CheckBillingAccessStatus":{
+               "Type":"Choice",
+               "Choices":[
+               {
+                  "Variable":"$.Data.Status",
+                  "StringEquals":"Wait",
+                  "Next":"WaitBillingAccessChanges"
+               },
+               {
+                  "Variable":"$.Data.Status",
+                  "StringEquals":"Completed",
+                  "Next":"StartPermissionstScanner"
+               }
+               ]
+             },
+             "WaitBillingAccessChanges": {
+               "Type": "Wait",
+               "Seconds": ${WaitTime},
+               "Next": "CheckBillingAccess"
+             },
+            "StartPermissionstScanner": {
+                 "Type": "Task",
+                 "Resource":"arn:aws:states:::states:startExecution",
+                 "Parameters":{
+                    "Input": {
+                      "Data.$": "$.Data"
+                    },
+                    "StateMachineArn": "${DependentResourceFinder}",
+                    "Name.$":"$.Data.ProcessName"
+                 },
+               "ResultPath":"$.Result",
+               "Next":"GetScannedResourcePermissions"
+              },
+              "GetScannedResourcePermissions":{
+                "Type":"Task",
+                "Resource":"${ScanedResourceStatus.Arn}",
+                "Catch":[
+                {
+                  "ErrorEquals":[
+                    "States.ALL"
+                  ],
+                  "Next":"UnhandledError"
+                }
+                ],
+                "Next":"CheckScanedResourcePermissionsStatus"
+              },
+              "CheckScanedResourcePermissionsStatus":{
+                "Type":"Choice",
+                "Choices":[
+                {
+                   "Variable":"$.Status",
+                   "StringEquals":"Wait",
+                   "Next":"WaitForScanedResourcePermissions"
+                },
+                {
+                   "Variable":"$.Status",
+                   "StringEquals":"Completed",
+                   "Next":"LeaveCurrentOrganization"
+                }
+                ]
+              },
+              "WaitForScanedResourcePermissions": {
+                "Type": "Wait",
+                "Seconds": ${WaitTime},
+                "Next": "GetScannedResourcePermissions"
+              },
+
+
+            "LeaveCurrentOrganization":{
+              "Type":"Task",
+              "Resource":"${LeaveOrganization.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CheckAccountOrgStatus"
+            },
+            "CheckAccountOrgStatus":{
+              "Type":"Choice",
+              "Choices":[
+              {
+                "Variable":"$.Status",
+                "StringEquals":"Wait",
+                "Next":"WaitForAccountOrgChanges"
+              },
+              {
+                "Variable":"$.Status",
+                "StringEquals":"Completed",
+                "Next":"JoinAWSOrganization"
+              }
+              ],
+              "Default":"UnhandledError"
+            },
+            "JoinAWSOrganization":{
+              "Type":"Task",
+              "Resource":"${JoinOrganization.Arn}",
+              "Catch":[
+              {
+                "ErrorEquals":[
+                  "States.ALL"
+                ],
+                "Next":"UnhandledError"
+              }
+              ],
+              "Next":"CheckJoinOrgStatus"
+            },
+            "CheckJoinOrgStatus":{
+              "Type":"Choice",
+              "Choices":[
+              {
+                "Variable":"$.Status",
+                "StringEquals":"Wait",
+                "Next":"WaitForAccountJoinOrgChanges"
+              },
+              {
+                "Variable":"$.Status",
+                "StringEquals":"ConcurrencyWait",
+                "Next":"WaitForOrgConcurrencyReleaseChanges"
+              },
+              {
+                "Variable":"$.Status",
+                "StringEquals":"Completed",
+                "Next":"UpdateOU"
+              }
+              ],
+              "Default":"UnhandledError"
+            },
+            "WaitForOrgConcurrencyReleaseChanges": {
+              "Type": "Wait",
+              "Seconds": ${WaitTime},
+              "Next": "JoinAWSOrganization"
+            },
+            "UpdateOU":{
+               "Type":"Task",
+               "Resource":"${UpdateOU.Arn}",
+               "Catch":[
+               {
+                 "ErrorEquals":[
+                   "States.ALL"
+                 ],
+                 "Next":"UnhandledError"
+               }
+               ],
+               "Next":"UpdateOUStatus"
+             },
+            "UpdateOUStatus":{
+                "Type":"Choice",
+                "Choices":[
+                {
+                  "Variable":"$.Status",
+                  "StringEquals":"Wait",
+                  "Next":"WaitForOUChanges"
+                },
+                {
+                  "Variable":"$.Status",
+                  "StringEquals":"Completed",
+                  "Next":"GenerateAccountTags"
+                }
+                ],
+                "Default":"UnhandledError"
+              },
+            "GenerateAccountTags":{
+               "Type":"Task",
+               "Resource":"${GenerateAccountTags.Arn}",
+               "Catch":[
+               {
+                 "ErrorEquals":[
+                   "States.ALL"
+                 ],
+                 "Next":"UnhandledError"
+               }
+               ],
+               "Next":"FlowCompleted"
+             },
+            "WaitForAccountOrgChanges": {
+              "Type": "Wait",
+              "Seconds": ${WaitTime},
+              "Next": "LeaveCurrentOrganization"
+            },
+            "WaitForOUChanges": {
+              "Type": "Wait",
+              "Seconds": ${WaitTime},
+              "Next": "UpdateOU"
+            },
+
+            "WaitForAccountJoinOrgChanges": {
+              "Type": "Wait",
+              "Seconds": ${WaitTime},
+              "Next": "JoinAWSOrganization"
+            },
+            "UnhandledError":{
+              "Type":"Fail"
+            },
+            "FlowCompleted":{
+              "Type":"Pass",
+              "End":true
+            }
+          }
+        }
+
+  # Notification Handler StepFunction
+  NotificationHandler:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${AWS::StackName}-NotificationHandler"
+      RoleArn: !Sub ${StepFunctionExecutionRole.Arn}
+      DefinitionString: !Sub |
+        {
+           "Comment":"AWS Migration engine Notification handler flow",
+           "StartAt":"NotificationIdentifier",
+           "States":{
+              "NotificationIdentifier":{
+                 "Type":"Task",
+                 "Resource":"${NotificationIdentifierLambda.Arn}",
+                 "Catch":[
+                    {
+                       "ErrorEquals":[
+                          "States.ALL"
+                       ],
+                       "Next":"Notifier"
+                    }
+                 ],
+                 "Next":"NotificationHandler"
+              },
+              "NotificationHandler":{
+                 "Type":"Task",
+                 "Resource":"${NotificationHandlerLambda.Arn}",
+                 "Catch":[
+                    {
+                       "ErrorEquals":[
+                          "States.ALL"
+                       ],
+                       "Next":"Notifier"
+                    }
+                 ],
+                 "Next":"Notifier"
+              },
+              "Notifier":{
+                 "Type":"Task",
+                 "Resource":"${NotifierLambda.Arn}",
+                 "End":true
+              }
+           }
+        }
+
+  # Dependent Resource Finder StepFunction
+  DependentResourceFinder:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${AWS::StackName}-DependentResourceFinder"
+      RoleArn: !Sub ${StepFunctionExecutionRole.Arn}
+      DefinitionString: !Sub |
+        {
+           "Comment":"AWS Migration engine dependent resource finder",
+           "StartAt":"GetActiveRegions",
+           "States":{
+              "GetActiveRegions":{
+                 "Type":"Task",
+                 "Resource":"${GetActiveRegionLambda.Arn}",
+                 "Next":"ActivateAnalyzer"
+              },
+              "ActivateAnalyzer":{
+                 "Type":"Task",
+                 "Resource":"${ActivateAnalyzerLambda.Arn}",
+                 "Next":"WaitForAnalyzerScan"
+              },
+              "WaitForAnalyzerScan": {
+                "Type": "Wait",
+                "Seconds": 1800,
+                "Next": "ScanPolicies"
+              },
+              "ScanPolicies":{
+                 "Type":"Task",
+                 "Resource":"${GetDependentResourcesLambda.Arn}",
+                 "Next": "CheckScanPoliciesStatus"
+              },
+              "CheckScanPoliciesStatus":{
+              "Type":"Choice",
+              "Choices":[
+                {
+                    "Variable":"$.Status",
+                    "StringEquals":"Wait",
+                    "Next":"WaitToUpdatePolicies"
+                },
+                {
+                    "Variable":"$.Status",
+                    "StringEquals":"Completed",
+                    "Next":"FlowCompleted"
+                }
+              ]
+             },
+             "WaitToUpdatePolicies": {
+                "Type": "Wait",
+                "Seconds": ${WaitTime},
+                "Next": "ScanPolicies"
+             },
+             "FlowCompleted":{
+              "Type":"Pass",
+              "End":true
+             }
+           }
+        }
+Outputs:
+  MigrationEngineArn:
+    Value:
+      Fn::Sub: ${MigrationEngine.Arn}
+
+  SharedResourcesBucketName:
+    Value:
+      Fn::Sub: ${SharedResourcesBucket}
