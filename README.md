@@ -77,12 +77,6 @@ This project contains source code and supporting files for AWS Account integrati
 A account(master or standalone) that need to be migrated should have MasterRole.
 
 
-```bash
-$ pip install pytest pytest-mock --user
-$ python -m pytest tests/ -v
-```
-
-
 ## Build and Deployment
 Application build and deployment is done using AWS SAM toolkit, make sure you have SAM toolkit installed on your machine.
 
