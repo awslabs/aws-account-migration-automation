@@ -35,42 +35,67 @@ def get_account_by_type_and_id():
 
 
 def lambda_handler(event, context):
-    logger.debug(f'Lambda event:{event}')
-    event['Status'] = Constant.StateMachineStates.COMPLETED
+    logger.debug(f"Lambda event:{event}")
+    event["Status"] = Constant.StateMachineStates.COMPLETED
     account = None
     try:
-        account = get_account_by_id(company_name=event['CompanyName'], account_id=event['AccountId'])[0]
+        account = get_account_by_id(
+            company_name=event["CompanyName"], account_id=event["AccountId"]
+        )[0]
         # Note: We don't want to Updated OU for account that need to be suspended or already move to targeted OU.
-        if account['AccountStatus'] >= Constant.AccountStatus.UPDATED:
-            event['Status'] = Constant.StateMachineStates.COMPLETED
+        if account["AccountStatus"] >= Constant.AccountStatus.UPDATED:
+            event["Status"] = Constant.StateMachineStates.COMPLETED
             return event
 
-        target_account_root_id = get_parent_id(account_id=event['AccountId'], parent_type=Constant.OrgParentType.ROOT)
+        target_account_root_id = get_parent_id(
+            account_id=event["AccountId"], parent_type=Constant.OrgParentType.ROOT
+        )
         if not target_account_root_id:
-            msg = f"Account {event['AccountId']} of Company {event['CompanyName']} is currently at OU level we don't " \
-                  f"support OU level account migration as of now."
-            account['Error'] = log_error(logger=logger, account_id=account['AccountId'], company_name=account[
-                'CompanyName'], error_type=Constant.ErrorType.COUE, msg=msg, notify=True,
-                                         slack_handle=account['SlackHandle'])
-            event['Status'] = Constant.StateMachineStates.WAIT
-        _org_client = boto3.session.Session().client('organizations')
+            msg = (
+                f"Account {event['AccountId']} of Company {event['CompanyName']} is currently at OU level we don't "
+                f"support OU level account migration as of now."
+            )
+            account["Error"] = log_error(
+                logger=logger,
+                account_id=account["AccountId"],
+                company_name=account["CompanyName"],
+                error_type=Constant.ErrorType.COUE,
+                msg=msg,
+                notify=True,
+                slack_handle=account["SlackHandle"],
+            )
+            event["Status"] = Constant.StateMachineStates.WAIT
+        _org_client = boto3.session.Session().client("organizations")
         _org_client.move_account(
-            AccountId=account['AccountId'],
+            AccountId=account["AccountId"],
             SourceParentId=target_account_root_id,
-            DestinationParentId=Constant.DEFAULT_OU_ID
+            DestinationParentId=Constant.DEFAULT_OU_ID,
         )
         account["AccountStatus"] = Constant.AccountStatus.UPDATED
-        event['Status'] = Constant.StateMachineStates.COMPLETED
+        event["Status"] = Constant.StateMachineStates.COMPLETED
 
     except ClientError as ce:
         msg = f"{ce.response['Error']['Code']}: {ce.response['Error']['Message']}"
-        account['Error'] = log_error(logger=logger, account_id=account['AccountId'], company_name=account[
-            'CompanyName'], error_type=Constant.ErrorType.COUE, msg=msg, error=ce, notify=True,
-                                     slack_handle=account['SlackHandle'])
-        event['Status'] = Constant.StateMachineStates.WAIT
+        account["Error"] = log_error(
+            logger=logger,
+            account_id=account["AccountId"],
+            company_name=account["CompanyName"],
+            error_type=Constant.ErrorType.COUE,
+            msg=msg,
+            error=ce,
+            notify=True,
+            slack_handle=account["SlackHandle"],
+        )
+        event["Status"] = Constant.StateMachineStates.WAIT
     except Exception as ex:
-        log_error(logger=logger, account_id=event['AccountId'], company_name=event[
-            'CompanyName'], error_type=Constant.ErrorType.COUE, notify=True, error=ex)
+        log_error(
+            logger=logger,
+            account_id=event["AccountId"],
+            company_name=event["CompanyName"],
+            error_type=Constant.ErrorType.COUE,
+            notify=True,
+            error=ex,
+        )
         raise ex
     finally:
         if account:

@@ -4,17 +4,14 @@ Transform: "AWS::Serverless-2016-10-31"
 Parameters:
   MasterAccountId:
     Type: String
-    Default: 540351219706
     Description: "AWS Master Account Id."
 
   SupportCaseCCEmailAddresses:
     Type: String
-    Default: "iftik@amazon.com"
     Description: "Support case email CC address"
 
   NotificationEmailAddresses:
     Type: String
-    Default: "iftik@amazon.com"
     Description: "Notification  email address"
 
   StsExternalID:
@@ -48,7 +45,6 @@ Parameters:
 
   DefaultOUId:
     Type: String
-    Default: ou-2z89-v1sr51hj
     Description: "Accounts that joined AWS organization successfully will be moved into this OU."
 
   CreateSupportCase:

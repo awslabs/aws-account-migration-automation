@@ -32,14 +32,16 @@ def get_enabled_regions(account_id=None):
     if not session:
         session = boto3.session.Session()
 
-    ec2 = session.client('ec2')
+    ec2 = session.client("ec2")
     describe_regions = ec2.describe_regions(
         Filters=[
-            {'Name': 'opt-in-status',
-             'Values': ['opt-in-not-required']}  # Regions that support v1 sts tokens
+            {
+                "Name": "opt-in-status",
+                "Values": ["opt-in-not-required"],
+            }  # Regions that support v1 sts tokens
         ]
     )
-    region_names = [region['RegionName'] for region in describe_regions['Regions']]
+    region_names = [region["RegionName"] for region in describe_regions["Regions"]]
 
     return region_names
 
@@ -49,7 +51,7 @@ def lambda_handler(event, context):
 
     if type(event) is list:
         event = event[0]
-    event = event['Data']
+    event = event["Data"]
 
-    event["Regions"] = get_enabled_regions(account_id=event['AccountId'])
+    event["Regions"] = get_enabled_regions(account_id=event["AccountId"])
     return event

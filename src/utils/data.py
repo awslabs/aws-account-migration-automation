@@ -28,20 +28,24 @@ logger.setLevel(logging.INFO)
 
 
 def get_account_data(s3_url: str):
-    """Gets a XLS from the provided s3_url and returns a dict of account info. """
+    """Gets a XLS from the provided s3_url and returns a dict of account info."""
 
-    if 's3://' not in s3_url:
-        raise ValueError(f's3_url was set to {s3_url} and did not include s3://')
+    if "s3://" not in s3_url:
+        raise ValueError(f"s3_url was set to {s3_url} and did not include s3://")
 
-    s3_path = s3_url.split('/', 3)  # Max split of 3 means object key will be a single item even if it has "/"
+    s3_path = s3_url.split(
+        "/", 3
+    )  # Max split of 3 means object key will be a single item even if it has "/"
     bucket_name = s3_path[2]
     object_key = s3_path[3]
 
     if not (bool(bucket_name) and bool(object_key)):
-        raise ValueError(f'bucket_name or object_key is either None or Empty')
+        raise ValueError(f"bucket_name or object_key is either None or Empty")
 
-    if not re.search(r'^\S+.xls$', object_key):
-        raise Exception("File format not supported, Only '.xsl' format is supported as of now.")
+    if not re.search(r"^\S+.xls$", object_key):
+        raise Exception(
+            "File format not supported, Only '.xsl' format is supported as of now."
+        )
 
     xls = get_s3_data(bucket_name, object_key)
     account_data = process_xls(xls)
@@ -49,10 +53,10 @@ def get_account_data(s3_url: str):
 
 
 def get_s3_data(bucket_name, object_key):
-    logger.info(f'Getting s3://{bucket_name}/{object_key}')
-    s3 = boto3.client('s3')
+    logger.info(f"Getting s3://{bucket_name}/{object_key}")
+    s3 = boto3.client("s3")
     get_object = s3.get_object(Bucket=bucket_name, Key=object_key)
-    file_content = get_object['Body'].read()
+    file_content = get_object["Body"].read()
     return file_content
 
 
@@ -72,11 +76,11 @@ def process_xls(xls: bytes):
             elif type(value) is not str:
                 value = str(value)
 
-            if key == 'AccountId':
+            if key == "AccountId":
                 value = value.zfill(12)
 
-            if key == 'Migrate':
-                if value.lower() in ['true', '1']:
+            if key == "Migrate":
+                if value.lower() in ["true", "1"]:
                     value = True
                 else:
                     value = False

@@ -32,12 +32,12 @@ logger.setLevel(getattr(logging, Constant.LOG_LEVEL))
 
 
 def lambda_handler(event, context):
-    logger.debug(f'Lambda data:{event}')
+    logger.debug(f"Lambda data:{event}")
 
     event = event.get("Data") or event
 
-    company_name = event['CompanyName']
-    account_id = event['AccountId']
+    company_name = event["CompanyName"]
+    account_id = event["AccountId"]
     account = get_account_by_id(company_name=company_name, account_id=account_id)[0]
 
     try:
@@ -54,29 +54,41 @@ def lambda_handler(event, context):
 
         create_roles(account_session)
         if account["AccountType"] == Constant.AccountType.STANDALONE:
-            event['Status'] = Constant.StateMachineStates.STANDALONE_ACCOUNT_FLOW
+            event["Status"] = Constant.StateMachineStates.STANDALONE_ACCOUNT_FLOW
         else:
-            event['Status'] = Constant.StateMachineStates.COMPLETED
+            event["Status"] = Constant.StateMachineStates.COMPLETED
 
     except ClientError as ce:
-        error_msg = log_error(logger=logger, account_id=account_id, company_name=company_name,
-                              error_type=Constant.ErrorType.CRLE, error=ce, notify=True,
-                              slack_handle=account['SlackHandle'])
+        error_msg = log_error(
+            logger=logger,
+            account_id=account_id,
+            company_name=company_name,
+            error_type=Constant.ErrorType.CRLE,
+            error=ce,
+            notify=True,
+            slack_handle=account["SlackHandle"],
+        )
 
-        account['Error'] = error_msg
+        account["Error"] = error_msg
         update_item(Constant.DB_TABLE, account)
-        event['Status'] = Constant.StateMachineStates.WAIT
+        event["Status"] = Constant.StateMachineStates.WAIT
 
     except Exception as ex:
-        log_error(logger=logger, account_id=account['AccountId'], company_name=account['CompanyName'],
-                  error_type=Constant.ErrorType.CRLE, notify=True, error=ex)
+        log_error(
+            logger=logger,
+            account_id=account["AccountId"],
+            company_name=account["CompanyName"],
+            error_type=Constant.ErrorType.CRLE,
+            notify=True,
+            error=ex,
+        )
         raise ex
     finally:
         if account:
             update_item(Constant.DB_TABLE, account)
 
-        event['CompanyName'] = company_name
-        event['AccountId'] = account_id
-        event['ProcessName'] = f"{company_name}-{account_id}-{time.monotonic_ns()}"
+        event["CompanyName"] = company_name
+        event["AccountId"] = account_id
+        event["ProcessName"] = f"{company_name}-{account_id}-{time.monotonic_ns()}"
 
-    return {'Data': event}
+    return {"Data": event}

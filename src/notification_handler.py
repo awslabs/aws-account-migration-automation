@@ -63,7 +63,7 @@ def error_handle(error: dict):
             "ErrorMessage": "error_message"
             "ActionItem":<Optional>
         }
-        """
+    """
     error_handler = error["handler"]
 
     if error_handler == "Notify":
@@ -80,21 +80,25 @@ def constraint_violation_exception_handler(error):
     :return:
     """
     if error["ErrorMessage"].rfind("valid payment method") >= 0:
-        if error.get('SlackHandle'):
-            del error['SlackHandle']
+        if error.get("SlackHandle"):
+            del error["SlackHandle"]
         error["Status"] = "Unhandled"
         return error
 
     if error["ErrorMessage"].rfind("completed phone pin verification") >= 0:
-        error["ActionItem"] = "Account owner need to preform required action manually. " \
-                              "To complete phone pin verification someone logged in as the root user must visit this " \
-                              "URL: https://portal.aws.amazon.com/gp/aws/developer/registration/index.html?client=organizations&enforcePI=True"
+        error["ActionItem"] = (
+            "Account owner need to preform required action manually. "
+            "To complete phone pin verification someone logged in as the root user must visit this "
+            "URL: https://portal.aws.amazon.com/gp/aws/developer/registration/index.html?client=organizations&enforcePI=True"
+        )
         error["Status"] = "Handled"
 
     if error["ErrorMessage"].rfind("signed the Customer Agreement") >= 0:
-        error["ActionItem"] = "Account owner need to preform required action manually. " \
-                              "To accept the agreement someone logged in as the root user must visit this " \
-                              "URL: https://portal.aws.amazon.com/billing/signup?type=resubscribe#/resubscribed"
+        error["ActionItem"] = (
+            "Account owner need to preform required action manually. "
+            "To accept the agreement someone logged in as the root user must visit this "
+            "URL: https://portal.aws.amazon.com/billing/signup?type=resubscribe#/resubscribed"
+        )
         error["Status"] = "Handled"
 
     return error
@@ -107,8 +111,8 @@ def handshake_constraint_violation_exception_handler(error):
     """
     account_id = error["AccountId"]
     company_name = error["CompanyName"]
-    if error.get('SlackHandle'):
-        del error['SlackHandle']
+    if error.get("SlackHandle"):
+        del error["SlackHandle"]
     try:
         account = get_account_by_id(company_name=company_name, account_id=account_id)[0]
         account["AccountStatus"] = Constant.AccountStatus.JOINED
@@ -116,11 +120,24 @@ def handshake_constraint_violation_exception_handler(error):
         error["Status"] = "Handled"
     except ClientError as ce:
         msg = f"{ce.response['Error']['Code']}: {ce.response['Error']['Message']}"
-        log_error(logger=logger, account_id=account_id, company_name=company_name,
-                  error_type=Constant.ErrorType.NHE, msg=msg, error=ce, notify=True)
+        log_error(
+            logger=logger,
+            account_id=account_id,
+            company_name=company_name,
+            error_type=Constant.ErrorType.NHE,
+            msg=msg,
+            error=ce,
+            notify=True,
+        )
     except Exception as ex:
-        log_error(logger=logger, account_id=account_id, company_name=company_name,
-                  error_type=Constant.ErrorType.NHE, notify=True, error=ex)
+        log_error(
+            logger=logger,
+            account_id=account_id,
+            company_name=company_name,
+            error_type=Constant.ErrorType.NHE,
+            notify=True,
+            error=ex,
+        )
         raise ex
     return error
 
@@ -129,8 +146,8 @@ def duplicate_account_exception_handler(error):
     account_id = error["AccountId"]
     company_name = error["CompanyName"]
     error["Status"] = "Handled"
-    if error.get('SlackHandle'):
-        del error['SlackHandle']
+    if error.get("SlackHandle"):
+        del error["SlackHandle"]
     try:
         account = get_account_by_id(company_name=company_name, account_id=account_id)[0]
 
@@ -138,10 +155,23 @@ def duplicate_account_exception_handler(error):
         update_item(Constant.DB_TABLE, account)
     except ClientError as ce:
         msg = f"{ce.response['Error']['Code']}: {ce.response['Error']['Message']}"
-        log_error(logger=logger, account_id=account_id, company_name=company_name,
-                  error_type=Constant.ErrorType.NHE, msg=msg, error=ce, notify=True)
+        log_error(
+            logger=logger,
+            account_id=account_id,
+            company_name=company_name,
+            error_type=Constant.ErrorType.NHE,
+            msg=msg,
+            error=ce,
+            notify=True,
+        )
     except Exception as ex:
-        log_error(logger=logger, account_id=account_id, company_name=company_name,
-                  error_type=Constant.ErrorType.NHE, notify=True, error=ex)
+        log_error(
+            logger=logger,
+            account_id=account_id,
+            company_name=company_name,
+            error_type=Constant.ErrorType.NHE,
+            notify=True,
+            error=ex,
+        )
         raise ex
     return error

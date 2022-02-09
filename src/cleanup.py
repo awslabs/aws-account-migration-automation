@@ -38,87 +38,126 @@ logger.setLevel(getattr(logging, Constant.LOG_LEVEL))
 
 
 def lambda_handler(event, context):
-    logger.debug(f'Lambda event:{event}')
-    company_name = event['CompanyName']
+    logger.debug(f"Lambda event:{event}")
+    company_name = event["CompanyName"]
     status = Constant.StateMachineStates.WAIT
 
     # check left over accounts to send Notification
-    left_accounts = get_db(Constant.DB_TABLE).query(IndexName='AccountType',
-                                                    KeyConditionExpression='CompanyName = :cn ',
-                                                    FilterExpression='AccountStatus = :asi',
-                                                    ExpressionAttributeValues=
-                                                    {':cn': company_name,
-                                                     ':asi': Constant.AccountStatus.LEFT}).get('Items')
+    left_accounts = (
+        get_db(Constant.DB_TABLE)
+        .query(
+            IndexName="AccountType",
+            KeyConditionExpression="CompanyName = :cn ",
+            FilterExpression="AccountStatus = :asi",
+            ExpressionAttributeValues={
+                ":cn": company_name,
+                ":asi": Constant.AccountStatus.LEFT,
+            },
+        )
+        .get("Items")
+    )
 
     if left_accounts:
         for account in left_accounts:
 
             try:
                 # Note: if assume MasterRole role fails, consider account as closed.
-                get_session(f"arn:aws:iam::{account['AccountId']}:role/{Constant.AWS_MASTER_ROLE}")
+                get_session(
+                    f"arn:aws:iam::{account['AccountId']}:role/{Constant.AWS_MASTER_ROLE}"
+                )
 
                 notify_data = {
-                    'SlackHandle': account['SlackHandle'],
-                    'SlackMessage': {
-                        'attachments': [
+                    "SlackHandle": account["SlackHandle"],
+                    "SlackMessage": {
+                        "attachments": [
                             {
-                                'color': '#0ec1eb',
-                                'author_name': Constant.AUTHOR_NAME,
-                                'author_icon': Constant.AUTHOR_ICON,
-                                'title': 'User Action Required',
-                                'text': f"Account: {account['AccountId']}  of company {company_name} "
-                                        f"is being removed from the current organization. Please close the "
-                                        f"account using your root username/password.",
-                                'footer': 'Note: This is an automated notification.',
-                                'ts': datetime.now().timestamp()
-                            }]
-                    }}
+                                "color": "#0ec1eb",
+                                "author_name": Constant.AUTHOR_NAME,
+                                "author_icon": Constant.AUTHOR_ICON,
+                                "title": "User Action Required",
+                                "text": f"Account: {account['AccountId']}  of company {company_name} "
+                                f"is being removed from the current organization. Please close the "
+                                f"account using your root username/password.",
+                                "footer": "Note: This is an automated notification.",
+                                "ts": datetime.now().timestamp(),
+                            }
+                        ]
+                    },
+                }
 
-                notify_msg(Constant.NOTIFICATION_TOPIC, Constant.NOTIFICATION_TITLE, json.dumps(notify_data))
+                notify_msg(
+                    Constant.NOTIFICATION_TOPIC,
+                    Constant.NOTIFICATION_TITLE,
+                    json.dumps(notify_data),
+                )
 
             except ClientError as ce:
-                if ce.response['Error']['Code'] == 'AccessDenied':
-                    account['AccountStatus'] = Constant.AccountStatus.SUSPENDED
+                if ce.response["Error"]["Code"] == "AccessDenied":
+                    account["AccountStatus"] = Constant.AccountStatus.SUSPENDED
                     update_item(Constant.DB_TABLE, account)
 
-                account['Error'] = log_error(logger=logger, account_id=account['AccountId'], company_name=account[
-                    'CompanyName'], error=ce, error_type=Constant.ErrorType.LOE, notify=True,
-                                             slack_handle=account['SlackHandle'])
+                account["Error"] = log_error(
+                    logger=logger,
+                    account_id=account["AccountId"],
+                    company_name=account["CompanyName"],
+                    error=ce,
+                    error_type=Constant.ErrorType.LOE,
+                    notify=True,
+                    slack_handle=account["SlackHandle"],
+                )
             except Exception as ex:
-                log_error(logger=logger, account_id=event['AccountId'], company_name=event[
-                    'CompanyName'], error_type=Constant.ErrorType.LOE, notify=True, error=ex)
+                log_error(
+                    logger=logger,
+                    account_id=event["AccountId"],
+                    company_name=event["CompanyName"],
+                    error_type=Constant.ErrorType.LOE,
+                    notify=True,
+                    error=ex,
+                )
                 raise ex
     else:
         # check if all account get processed.
-        in_process_accounts = get_db(Constant.DB_TABLE).query(IndexName='AccountType',
-                                                              KeyConditionExpression='CompanyName = :cn ',
-                                                              FilterExpression=
-                                                              'AccountStatus < :asi AND Migrate = :mi',
-                                                              ExpressionAttributeValues=
-                                                              {':cn': company_name,
-                                                               ':asi': Constant.AccountStatus.UPDATED,
-                                                               ':mi': True}).get('Items')
+        in_process_accounts = (
+            get_db(Constant.DB_TABLE)
+            .query(
+                IndexName="AccountType",
+                KeyConditionExpression="CompanyName = :cn ",
+                FilterExpression="AccountStatus < :asi AND Migrate = :mi",
+                ExpressionAttributeValues={
+                    ":cn": company_name,
+                    ":asi": Constant.AccountStatus.UPDATED,
+                    ":mi": True,
+                },
+            )
+            .get("Items")
+        )
 
         if not in_process_accounts and not left_accounts:
             notify_data = {
-                'SlackHandle': None,
-                'SlackMessage': {
-                    'attachments': [
+                "SlackHandle": None,
+                "SlackMessage": {
+                    "attachments": [
                         {
-                            'color': '#0ec1eb',
-                            'author_name': Constant.AUTHOR_NAME,
-                            'author_icon': Constant.AUTHOR_ICON,
-                            'title': 'Migration Engine Stopped',
-                            'text': f"Migration Engine ran successfully for company {company_name}",
-                            'footer': Constant.NOTIFICATION_NOTES,
-                            'ts': datetime.now().timestamp()
-                        }]
-                }}
-            notify_msg(Constant.NOTIFICATION_TOPIC, Constant.NOTIFICATION_TITLE, json.dumps(notify_data))
+                            "color": "#0ec1eb",
+                            "author_name": Constant.AUTHOR_NAME,
+                            "author_icon": Constant.AUTHOR_ICON,
+                            "title": "Migration Engine Stopped",
+                            "text": f"Migration Engine ran successfully for company {company_name}",
+                            "footer": Constant.NOTIFICATION_NOTES,
+                            "ts": datetime.now().timestamp(),
+                        }
+                    ]
+                },
+            }
+            notify_msg(
+                Constant.NOTIFICATION_TOPIC,
+                Constant.NOTIFICATION_TITLE,
+                json.dumps(notify_data),
+            )
             status = Constant.StateMachineStates.COMPLETED
 
-    return {'Status': status, 'CompanyName': company_name}
+    return {"Status": status, "CompanyName": company_name}
 
 
 if __name__ == "__main__":
-    lambda_handler({'CompanyName': 'Xyz'}, None)
+    lambda_handler({"CompanyName": "Xyz"}, None)
