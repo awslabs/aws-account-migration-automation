@@ -42,14 +42,17 @@ logger.setLevel(getattr(logging, Constant.LOG_LEVEL))
 
 
 def lambda_handler(event, context):
-    logger.debug(f'Lambda event:{event}')
-    msg = event['Records'][0]['Sns']['Message']
+    logger.debug(f"Lambda event:{event}")
+    msg = event["Records"][0]["Sns"]["Message"]
     return handle_error(json.loads(msg))
 
 
 def handle_error(error: dict):
-    sfn_client = boto3.client('stepfunctions')
-    sfn_client.start_execution(stateMachineArn=Constant.NOTIFICATION_OBSERVER_ARN,
-                               name=f"{error.get('CompanyName') or 'General'}-"
-                                    f"{error.get('AccountId') or 'Notification'}-"
-                                    f"{error.get('ErrorCode') or ''}-{time.monotonic_ns()}", input=json.dumps(error))
+    sfn_client = boto3.client("stepfunctions")
+    sfn_client.start_execution(
+        stateMachineArn=Constant.NOTIFICATION_OBSERVER_ARN,
+        name=f"{error.get('CompanyName') or 'General'}-"
+        f"{error.get('AccountId') or 'Notification'}-"
+        f"{error.get('ErrorCode') or ''}-{time.monotonic_ns()}",
+        input=json.dumps(error),
+    )

@@ -30,63 +30,80 @@ logger = logging.getLogger(__name__)
 logger.setLevel(getattr(logging, Constant.LOG_LEVEL))
 
 
-def get_org_level_resources(region: str, account: dict, session, _org_id, target_org_id) -> dict:
+def get_org_level_resources(
+    region: str, account: dict, session, _org_id, target_org_id
+) -> dict:
     status = Constant.StateMachineStates.COMPLETED
 
-    analyzer_client = session.client('accessanalyzer', region_name=region)
+    analyzer_client = session.client("accessanalyzer", region_name=region)
 
     logger.debug(f"analyzer for region: {region}")
 
-    analysers = analyzer_client.list_analyzers()['analyzers']
+    analysers = analyzer_client.list_analyzers()["analyzers"]
 
     if not analysers:
         msg = f"No Analyzer found in  region {region}"
-        log_error(logger=logger, account_id=account['AccountId'], company_name=account['CompanyName'],
-                  error_type=Constant.ErrorType.OLPE, msg=msg,
-                  notify=True, slack_handle=account['SlackHandle'])
+        log_error(
+            logger=logger,
+            account_id=account["AccountId"],
+            company_name=account["CompanyName"],
+            error_type=Constant.ErrorType.OLPE,
+            msg=msg,
+            notify=True,
+            slack_handle=account["SlackHandle"],
+        )
         update_item(Constant.DB_TABLE, account)
         return Constant.StateMachineStates.WAIT
 
-    arn = analysers[0]['arn']
+    arn = analysers[0]["arn"]
     # check for PrincipalOrgID
 
     org_level_resource_list = []
-    org_issues = [resource['resource'] for resource in analyzer_client.list_findings(
-        analyzerArn=arn,
-        filter={
-            'condition.aws:PrincipalOrgID': {
-                'contains': [
-                    target_org_id]}
-        })['findings'] if resource['status'] == 'ACTIVE']
-    if org_issues:
-        org_issues_resolved = [resource['resource'] for resource in analyzer_client.list_findings(
+    org_issues = [
+        resource["resource"]
+        for resource in analyzer_client.list_findings(
             analyzerArn=arn,
-            filter={
-                'condition.aws:PrincipalOrgID': {
-                    'contains': [_org_id]}
-            })['findings'] if resource['status'] == 'ACTIVE']
+            filter={"condition.aws:PrincipalOrgID": {"contains": [target_org_id]}},
+        )["findings"]
+        if resource["status"] == "ACTIVE"
+    ]
+    if org_issues:
+        org_issues_resolved = [
+            resource["resource"]
+            for resource in analyzer_client.list_findings(
+                analyzerArn=arn,
+                filter={"condition.aws:PrincipalOrgID": {"contains": [_org_id]}},
+            )["findings"]
+            if resource["status"] == "ACTIVE"
+        ]
 
-        org_level_resource_list = list(set(org_issues).symmetric_difference(set(org_issues_resolved)))
+        org_level_resource_list = list(
+            set(org_issues).symmetric_difference(set(org_issues_resolved))
+        )
 
     # check for PrincipalOrgID
     org_path_level_resource_list = []
-    org_path_issue = [resource['resource'] for resource in analyzer_client.list_findings(
-        analyzerArn=arn,
-        filter=
-        {
-            'condition.aws:PrincipalOrgPaths': {
-                'contains': [
-                    target_org_id]}
-        })['findings'] if resource['status'] == 'ACTIVE']
-    if org_path_issue:
-        org_path_resolved = [resource['resource'] for resource in analyzer_client.list_findings(
+    org_path_issue = [
+        resource["resource"]
+        for resource in analyzer_client.list_findings(
             analyzerArn=arn,
-            filter={
-                'condition.aws:PrincipalOrgPaths': {
-                    'contains': [_org_id]}
-            })['findings'] if resource['status'] == 'ACTIVE']
+            filter={"condition.aws:PrincipalOrgPaths": {"contains": [target_org_id]}},
+        )["findings"]
+        if resource["status"] == "ACTIVE"
+    ]
+    if org_path_issue:
+        org_path_resolved = [
+            resource["resource"]
+            for resource in analyzer_client.list_findings(
+                analyzerArn=arn,
+                filter={"condition.aws:PrincipalOrgPaths": {"contains": [_org_id]}},
+            )["findings"]
+            if resource["status"] == "ACTIVE"
+        ]
 
-        org_path_level_resource_list = list(set(org_path_issue).symmetric_difference(set(org_path_resolved)))
+        org_path_level_resource_list = list(
+            set(org_path_issue).symmetric_difference(set(org_path_resolved))
+        )
 
     org_level_permissions = org_level_resource_list + org_path_level_resource_list
 
@@ -94,9 +111,15 @@ def get_org_level_resources(region: str, account: dict, session, _org_id, target
         status = Constant.StateMachineStates.WAIT
         for resource in org_level_permissions:
             msg = f"Resource {resource} is using organization level permission to access resource"
-            log_error(logger=logger, account_id=account['AccountId'], company_name=account['CompanyName'],
-                      error_type=Constant.ErrorType.OLPE, msg=msg,
-                      notify=True, slack_handle=account['SlackHandle'])
+            log_error(
+                logger=logger,
+                account_id=account["AccountId"],
+                company_name=account["CompanyName"],
+                error_type=Constant.ErrorType.OLPE,
+                msg=msg,
+                notify=True,
+                slack_handle=account["SlackHandle"],
+            )
 
         account["OrgLevelPermissions"] = org_level_permissions
         update_item(Constant.DB_TABLE, account)
@@ -105,22 +128,28 @@ def get_org_level_resources(region: str, account: dict, session, _org_id, target
 
 
 def lambda_handler(event, context):
-    logger.debug(f'Lambda event:{event}')
+    logger.debug(f"Lambda event:{event}")
     status = set({})
 
     account_id = event["AccountId"]
-    company_name = event['CompanyName']
+    company_name = event["CompanyName"]
     account = None
 
     try:
         account = get_account_by_id(company_name=company_name, account_id=account_id)[0]
-        session = get_session(f"arn:aws:iam::{account_id}:role/{Constant.AWS_MASTER_ROLE}")
+        session = get_session(
+            f"arn:aws:iam::{account_id}:role/{Constant.AWS_MASTER_ROLE}"
+        )
 
         target_org_id = get_org_id(session=session)
         AWS_org_id = get_org_id()
 
         for region in event["Regions"]:
-            status.add(get_org_level_resources(region, account, session, AWS_org_id, target_org_id))
+            status.add(
+                get_org_level_resources(
+                    region, account, session, AWS_org_id, target_org_id
+                )
+            )
 
         if {Constant.StateMachineStates.WAIT}.issubset(status):
             event["Status"] = Constant.StateMachineStates.WAIT
@@ -129,15 +158,27 @@ def lambda_handler(event, context):
             event["Status"] = Constant.StateMachineStates.COMPLETED
 
     except ClientError as ce:
-        error_msg = log_error(logger=logger, account_id=event['AccountId'], company_name=event['CompanyName'],
-                              error_type=Constant.ErrorType.OLPE, error=ce,
-                              notify=True, slack_handle=account.get('SlackHandle'))
+        error_msg = log_error(
+            logger=logger,
+            account_id=event["AccountId"],
+            company_name=event["CompanyName"],
+            error_type=Constant.ErrorType.OLPE,
+            error=ce,
+            notify=True,
+            slack_handle=account.get("SlackHandle"),
+        )
         account["Error"] = error_msg
         raise ce
 
     except Exception as ex:
-        log_error(logger=logger, account_id=event['AccountId'], company_name=event['CompanyName'],
-                  error_type=Constant.ErrorType.OLPE, notify=True, error=ex)
+        log_error(
+            logger=logger,
+            account_id=event["AccountId"],
+            company_name=event["CompanyName"],
+            error_type=Constant.ErrorType.OLPE,
+            notify=True,
+            error=ex,
+        )
         raise ex
     finally:
         if account:

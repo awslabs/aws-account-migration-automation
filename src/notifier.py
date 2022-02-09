@@ -42,40 +42,47 @@ logger.setLevel(getattr(logging, Constant.LOG_LEVEL))
 def lambda_handler(event, context):
     logger.info(event)
     msg = event
-    if not msg.get('SlackMessage'):
+    if not msg.get("SlackMessage"):
         account_id = msg["AccountId"]
 
         title = f" {msg['Type']} \n Company: {msg['CompanyName']}"
-        color = '#4caf50'
+        color = "#4caf50"
 
-        if account_id and account_id != '':
+        if account_id and account_id != "":
             title = title + f"- AccountId: {account_id}"
 
-        if event.get('Type'):
-            color = '#d84315'
+        if event.get("Type"):
+            color = "#d84315"
 
-        if event.get('ActionItem'):
+        if event.get("ActionItem"):
             title = f"User Action required for {title}"
-            color = '#ffc107'
+            color = "#ffc107"
 
-        text = f'```{json.dumps(event)}```' if not event.get('ActionItem') else event.get('ActionItem')
+        text = (
+            f"```{json.dumps(event)}```"
+            if not event.get("ActionItem")
+            else event.get("ActionItem")
+        )
 
-        message = dict({
-            'SlackMessage': {
-                'attachments': [
-                    {
-                        'color': color,
-                        'author_name': title,
-                        'author_icon': Constant.AUTHOR_ICON,
-                        'title': Constant.NOTIFICATION_TITLE,
-                        'text': text,
-                        'footer': Constant.NOTIFICATION_NOTES,
-                        'ts': datetime.now().timestamp()
-                    }]
+        message = dict(
+            {
+                "SlackMessage": {
+                    "attachments": [
+                        {
+                            "color": color,
+                            "author_name": title,
+                            "author_icon": Constant.AUTHOR_ICON,
+                            "title": Constant.NOTIFICATION_TITLE,
+                            "text": text,
+                            "footer": Constant.NOTIFICATION_NOTES,
+                            "ts": datetime.now().timestamp(),
+                        }
+                    ]
+                }
             }
-        })
+        )
     else:
         message = msg
-    if msg.get('SlackHandle'):
-        message["WebhookUrl"] = msg.get('SlackHandle')
+    if msg.get("SlackHandle"):
+        message["WebhookUrl"] = msg.get("SlackHandle")
     notify_msg(Constant.SLACK_TOPIC, Constant.NOTIFICATION_TITLE, json.dumps(message))

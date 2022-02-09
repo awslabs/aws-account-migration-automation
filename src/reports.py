@@ -39,9 +39,9 @@ logger.setLevel(getattr(logging, Constant.LOG_LEVEL))
 
 
 def lambda_handler(event, context):
-    logger.debug(f'Lambda event:{event}')
+    logger.debug(f"Lambda event:{event}")
     # In case user want to run report for particular company
-    company_name = event.get('CompanyName')
+    company_name = event.get("CompanyName")
     # Sign URL Expire time in sec (Total 7 days)
     expires_in = 60 * 60 * 24 * 7
 
@@ -57,7 +57,7 @@ def lambda_handler(event, context):
         else:
             # XLS Flow
             workbook = xlwt.Workbook()
-            worksheet = workbook.add_sheet('MigrationEngineReport')
+            worksheet = workbook.add_sheet("MigrationEngineReport")
             cols_data = [key for key, value in accounts[0].items()]
 
             # Adding headers
@@ -65,7 +65,7 @@ def lambda_handler(event, context):
                 worksheet.write(0, i, field_name)
                 worksheet.col(i).width = 6000
 
-            style = xlwt.easyxf('align: wrap yes')
+            style = xlwt.easyxf("align: wrap yes")
             # Adding  row data
             for row_index, row in enumerate(accounts):
                 for cell_index, cell_value in enumerate(row.items()):
@@ -91,82 +91,113 @@ def lambda_handler(event, context):
                 fp.close()
 
             # Uploading xls data to upload to s3
-            s3_client = boto3.client('s3')
-            s3_client.put_object(Body=data, Bucket=Constant.SHARED_RESOURCE_BUCKET,
-                                 Key=f"{key}.xls")
+            s3_client = boto3.client("s3")
+            s3_client.put_object(
+                Body=data, Bucket=Constant.SHARED_RESOURCE_BUCKET, Key=f"{key}.xls"
+            )
 
             # generate pre-signed url
-            xls_link = s3_client.generate_presigned_url('get_object',
-                                                        Params={'Bucket': Constant.SHARED_RESOURCE_BUCKET,
-                                                                'Key': f"{key}.xls"},
-                                                        ExpiresIn=expires_in)
+            xls_link = s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": Constant.SHARED_RESOURCE_BUCKET, "Key": f"{key}.xls"},
+                ExpiresIn=expires_in,
+            )
 
             # HTML Flow
             # jinja2 Template
-            template = Template("<table> "
-                                "{% set glob={'isHeader':true} %}"
-                                "{% for account in accounts %}"
-                                "{% if glob.isHeader %}"
-                                "{% set _ = glob.update({'isHeader':false}) %}"
-                                "<tr  style='background: gray;'>"
-                                "{% for key,value in account.items() %}"
-                                "<th > {{ key }} </th>"
-                                "{% endfor %}"
-                                "</tr>"
-                                "{% endif %}"
-                                "<tr>"
-                                "{% for key,value in account.items() %}"
-                                "<td> {{ value }} </td>"
-                                "{% endfor %}"
-                                "</tr>"
-                                "{% endfor %}"
-                                "</table>"
-                                "<style>"
-                                "th {background-color: #4CAF50;color: white;}"
-                                "th, td {padding: 5px;text-align: left;}"
-                                "tr:nth-child(even) {background-color: #f2f2f2;}"
-                                "</style>")
+            template = Template(
+                "<table> "
+                "{% set glob={'isHeader':true} %}"
+                "{% for account in accounts %}"
+                "{% if glob.isHeader %}"
+                "{% set _ = glob.update({'isHeader':false}) %}"
+                "<tr  style='background: gray;'>"
+                "{% for key,value in account.items() %}"
+                "<th > {{ key }} </th>"
+                "{% endfor %}"
+                "</tr>"
+                "{% endif %}"
+                "<tr>"
+                "{% for key,value in account.items() %}"
+                "<td> {{ value }} </td>"
+                "{% endfor %}"
+                "</tr>"
+                "{% endfor %}"
+                "</table>"
+                "<style>"
+                "th {background-color: #4CAF50;color: white;}"
+                "th, td {padding: 5px;text-align: left;}"
+                "tr:nth-child(even) {background-color: #f2f2f2;}"
+                "</style>"
+            )
 
             # Generate HTML
             report_data = template.render(accounts=accounts)
             # Upload HTML data to s3
-            s3_client.put_object(Body=bytes(report_data, 'utf-8'), Bucket=Constant.SHARED_RESOURCE_BUCKET,
-                                 Key=f"{key}.html")
+            s3_client.put_object(
+                Body=bytes(report_data, "utf-8"),
+                Bucket=Constant.SHARED_RESOURCE_BUCKET,
+                Key=f"{key}.html",
+            )
             # generate pre-signed url
-            html_link = s3_client.generate_presigned_url('get_object',
-                                                         Params={'Bucket': Constant.SHARED_RESOURCE_BUCKET,
-                                                                 'Key': f"{key}.html"},
-                                                         ExpiresIn=expires_in)
+            html_link = s3_client.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": Constant.SHARED_RESOURCE_BUCKET,
+                    "Key": f"{key}.html",
+                },
+                ExpiresIn=expires_in,
+            )
 
             notify_data = {
-                'SlackHandle': None,
-                'SlackMessage': {
-                    'attachments': [
+                "SlackHandle": None,
+                "SlackMessage": {
+                    "attachments": [
                         {
-                            'color': '#0ec1eb',
-                            'author_name': Constant.AUTHOR_NAME,
-                            'author_icon': Constant.AUTHOR_ICON,
-                            'title': 'Migration Engine Reports',
-                            'text': f"Click <{xls_link}|Report.xls> for XLS report.\n"
-                                    f"Click <{html_link}|Report.html> for HTML report.\n"
-                                    f"Above reports links will expire after 7 days.",
-                            'footer': Constant.NOTIFICATION_NOTES,
-                            'ts': datetime.datetime.now().timestamp()
-                        }]
-                }}
-            notify_msg(Constant.NOTIFICATION_TOPIC, Constant.NOTIFICATION_TITLE, json.dumps(notify_data))
+                            "color": "#0ec1eb",
+                            "author_name": Constant.AUTHOR_NAME,
+                            "author_icon": Constant.AUTHOR_ICON,
+                            "title": "Migration Engine Reports",
+                            "text": f"Click <{xls_link}|Report.xls> for XLS report.\n"
+                            f"Click <{html_link}|Report.html> for HTML report.\n"
+                            f"Above reports links will expire after 7 days.",
+                            "footer": Constant.NOTIFICATION_NOTES,
+                            "ts": datetime.datetime.now().timestamp(),
+                        }
+                    ]
+                },
+            }
+            notify_msg(
+                Constant.NOTIFICATION_TOPIC,
+                Constant.NOTIFICATION_TITLE,
+                json.dumps(notify_data),
+            )
 
     except ClientError as ce:
-        log_error(logger=logger, account_id=None, company_name=company_name or "All Companies", error=ce,
-                  error_type=Constant.ErrorType.RGE, notify=True)
+        log_error(
+            logger=logger,
+            account_id=None,
+            company_name=company_name or "All Companies",
+            error=ce,
+            error_type=Constant.ErrorType.RGE,
+            notify=True,
+        )
         raise ce
     except Exception as ex:
-        log_error(logger=logger, account_id=None, company_name=company_name or "All Companies",
-                  error_type=Constant.ErrorType.RGE,
-                  notify=True, error=ex)
+        log_error(
+            logger=logger,
+            account_id=None,
+            company_name=company_name or "All Companies",
+            error_type=Constant.ErrorType.RGE,
+            notify=True,
+            error=ex,
+        )
         raise ex
 
-    return {'Status': Constant.StateMachineStates.COMPLETED, 'CompanyName': company_name}
+    return {
+        "Status": Constant.StateMachineStates.COMPLETED,
+        "CompanyName": company_name,
+    }
 
 
 lambda_handler({}, None)

@@ -32,43 +32,58 @@ logger.setLevel(getattr(logging, Constant.LOG_LEVEL))
 
 
 def lambda_handler(event, context):
-    logger.debug(f'Lambda event:{event}')
+    logger.debug(f"Lambda event:{event}")
     account_id = event["Data"]["AccountId"]
-    company_name = event["Data"]['CompanyName']
+    company_name = event["Data"]["CompanyName"]
     account = {}
     try:
         account = get_account_by_id(company_name=company_name, account_id=account_id)[0]
         # Note:  Billing access check is not required for standalone account.
-        if account['AccountType'] == Constant.AccountType.STANDALONE:
-            event["Data"]['Status'] = Constant.StateMachineStates.COMPLETED
+        if account["AccountType"] == Constant.AccountType.STANDALONE:
+            event["Data"]["Status"] = Constant.StateMachineStates.COMPLETED
             return event
 
-        session = get_session(f"arn:aws:iam::{account_id}:role/{Constant.AWS_MASTER_ROLE}")
-        cost_explorer_client = session.client('ce')
+        session = get_session(
+            f"arn:aws:iam::{account_id}:role/{Constant.AWS_MASTER_ROLE}"
+        )
+        cost_explorer_client = session.client("ce")
         current_date = datetime.date.today()
         back_date = current_date - datetime.timedelta(days=5)
-        cost_explorer_client.get_cost_and_usage(TimePeriod={
-            'Start': str(back_date),
-            'End': str(current_date)
-        }, Granularity='DAILY', Metrics=['UnblendedCost'])
+        cost_explorer_client.get_cost_and_usage(
+            TimePeriod={"Start": str(back_date), "End": str(current_date)},
+            Granularity="DAILY",
+            Metrics=["UnblendedCost"],
+        )
     except ClientError as ce:
 
-        error_msg = log_error(logger=logger, account_id=account['AccountId'], company_name=account['CompanyName'],
-                              error_type=Constant.ErrorType.OLPE, error=ce,
-                              notify=True, slack_handle=account['SlackHandle'])
+        error_msg = log_error(
+            logger=logger,
+            account_id=account["AccountId"],
+            company_name=account["CompanyName"],
+            error_type=Constant.ErrorType.OLPE,
+            error=ce,
+            notify=True,
+            slack_handle=account["SlackHandle"],
+        )
         account["Error"] = error_msg
 
-        if ce.response.get('Error').get('Code') == 'AccessDeniedException':
-            event["Data"]['Status'] = Constant.StateMachineStates.WAIT
+        if ce.response.get("Error").get("Code") == "AccessDeniedException":
+            event["Data"]["Status"] = Constant.StateMachineStates.WAIT
             return event
         raise ce
     except Exception as ex:
-        log_error(logger=logger, account_id=account_id, company_name=company_name,
-                  error_type=Constant.ErrorType.OLPE, notify=True, error=ex)
+        log_error(
+            logger=logger,
+            account_id=account_id,
+            company_name=company_name,
+            error_type=Constant.ErrorType.OLPE,
+            notify=True,
+            error=ex,
+        )
         raise ex
     finally:
         if account:
             update_item(Constant.DB_TABLE, account)
 
-    event["Data"]['Status'] = Constant.StateMachineStates.COMPLETED
+    event["Data"]["Status"] = Constant.StateMachineStates.COMPLETED
     return event

@@ -44,9 +44,7 @@ def create_analyzer(event: dict) -> dict:
 
         if len(analyzer_client.list_analyzers()["analyzers"]):
             analyzer = analyzer_client.create_analyzer(
-
-                analyzerName=f"default_analyzer_{region}",
-                type="ACCOUNT"
+                analyzerName=f"default_analyzer_{region}", type="ACCOUNT"
             )
             logger.debug(f"Analyzer {analyzer} created for region {region}")
         else:

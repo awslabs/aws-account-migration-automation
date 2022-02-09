@@ -43,7 +43,7 @@ def update_item(table, item):
 
 
 def get_db(table):
-    db_client = boto3.resource('dynamodb')
+    db_client = boto3.resource("dynamodb")
     return db_client.Table(table)
 
 
